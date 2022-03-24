@@ -175,22 +175,26 @@ router.post(
   catchErrors(async (req, res, next) => {
     try {
       z.string().min(1).parse(req.body.name);
-      z.string().min(1).parse(req.body.phone);
+      z.optional(z.string().min(1)).parse(req.body.phone);
       z.string().email().parse(req.body.email);
+      z.string().min(1).parse(req.body.newPassword);
+      z.string().min(1).parse(req.body.verifyPassword);
     } catch (e) {
       const error = new Error(`Invalid request in user creation: ${e}`);
       error.status = 400;
       return next(error);
     }
 
-    const { name, email, phone } = req.body;
-    const token = crypto.randomBytes(20).toString("hex");
+    const { name, email, phone, password, verifyPassword } = req.body;
+
+    if (password !== verifyPassword) return res.status(400).send({ ok: false, error: "Les mots de passe ne sont pas identiques" });
+    if (!validatePassword(password)) return res.status(400).send({ ok: false, error: passwordCheckError, code: PASSWORD_NOT_VALIDATED });
+
     const newUser = {
       name,
       email: email.trim().toLowerCase(),
       phone: phone.trim().toLowerCase(),
-      forgotPasswordResetToken: token,
-      forgotPasswordResetExpires: new Date(Date.now() + JWT_MAX_AGE * 1000),
+      password,
     };
 
     const prevUser = await UserModel.findOne({ email: newUser.email });
@@ -198,28 +202,12 @@ router.post(
 
     const user = await UserModel.create(newUser);
 
-    const subject = `Bienvenue dans ${config.APP_NAME} 👋`;
-    const body = `Bonjour ${user.name} !
-
-Votre identifiant pour vous connecter à ${config.APP_NAME} est ${user.email}.
-Vous pouvez dès à présent vous connecter pour choisir votre mot de passe ici:
-${config.APP_URL}/auth/reset?token=${token}
-
-Vous pourrez ensuite commencer à utiliser ${config.APP_NAME} en suivant ce lien:
-${config.APP_URL}/
-
-`;
-    await mailservice.sendEmail(data.email, subject, body);
+    const token = jwt.sign({ _id: user._id }, config.SECRET, { expiresIn: JWT_MAX_AGE });
+    res.cookie("jwt", token, cookieOptions());
 
     return res.status(200).send({
       ok: true,
-      data: {
-        _id: data._id,
-        name: data.name,
-        email: data.email,
-        createdAt: data.createdAt,
-        updatedAt: data.updatedAt,
-      },
+      user: user.userResponseModel(),
     });
   })
 );
